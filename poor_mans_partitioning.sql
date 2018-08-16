@@ -42,9 +42,6 @@ end;
 begin  /* build tables if needed */
   declare create_rows integer default 1000000;
   declare cur_row integer;
-  
-  set current schema kxk632;
-  set path kxk632;  
 
   if gv_rebuild_tables = 'Y' then
     /* generate test data */
