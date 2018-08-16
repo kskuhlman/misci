@@ -1,6 +1,5 @@
 -- Plan cache-related services:
-select service_category, service_schema_name, service_name, sql_object_type, example, earliest_possible_release 
-from QSYS2.SERVICES_INFO where service_category in ('DATABASE-PERFORMANCE','DATABASE-PLAN CACHE');
+--select service_category, service_schema_name, service_name, sql_object_type, example, earliest_possible_release from QSYS2.SERVICES_INFO where service_category in ('DATABASE-PERFORMANCE','DATABASE-PLAN CACHE');
 -- DUMP_PLAN_CACHE
 -- PERFORMANCE_LIST_EXPLAINABLE
 -- LIST_EXPLAINABLE_DETAILED
@@ -17,6 +16,9 @@ create or replace variable gv_snapshot_schema varchar(10) default('DBMON');
 create or replace variable gv_snapshot_name varchar(10) default('M'||to_char(current_date, 'YYMMDD'));
 
 CALL QSYS2.DUMP_PLAN_CACHE(gv_snapshot_schema, gv_snapshot_name);
+-- 19 minutes on mydb.   10 minutes on enddr.
+
+
 -- Same as above, jsut a different stored proc.   There are more parms, but they're named filter" 1-36, so who knows what is which :-(
 --CALL QSYS2.ANALYZE_PLAN_CACHE( '01         10', gv_snapshot_schema, gv_snapshot_name, X'', 'RE');
 
@@ -29,10 +31,6 @@ CALL QSYS2.DUMP_PLAN_CACHE(gv_snapshot_schema, gv_snapshot_name);
 --CALL QSYS2.EXTRACT_STATEMENTS(gv_snapshot_schema, gv_snapshot_name, ADDITIONAL_SELECT_COLUMNS => ' DEC(QQI6)/1000000.0 as Total_time, QVC102 as Current_User_Profile ', ADDITIONAL_PREDICATES => ' AND QQI6 > 1000000 ', ORDER_BY => ' ORDER BY QQI6 DESC ');
 -- Everything over 1 second for current_user
 --CALL QSYS2.EXTRACT_STATEMENTS(gv_snapshot_schema, gv_snapshot_name, ADDITIONAL_SELECT_COLUMNS => ' DEC(QQI6)/1000000.0 as Total_time, QVC102 as Current_User_Profile ', ADDITIONAL_PREDICATES => ' AND QVC102 = ''''current_user'''' AND QQI6 > 1000000 ', ORDER_BY => ' ORDER BY QQI6 DESC ');
-
---create or replace variable current_user.gv_statement_text varchar(4096); 
---set current_user.gv_statement_text = 'select a.bar, a.* from sysibm.sysdummy1';
---select * from TABLE(qsys2.parse_statement(current_user.gv_statement_text, '*SYS', '*PERIOD', '*APOSTSQL')) c    ;
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -79,9 +77,12 @@ WHERE QQRID=1000)';
  execute immediate stmt;
 end;
 
+create table dbmon.plan_raw as (select current_date capture_date, t.* from dbmon.plan_latest t) with no data;
 insert into dbmon.plan_raw select current_date capture_date, t.* from dbmon.plan_latest t;
 
 select count(*) from dbmon.plan_raw;
+select * from dbmon.plan_raw where upper(statement_text) like '%SYS%';
+
 
 select count(*) from (
 select distinct system_name, current_date extract_date, -- job_name, --job_user, job_number, current_user_profile, Thread_ID, 
@@ -101,8 +102,9 @@ select distinct system_name, current_date extract_date, -- job_name, --job_user,
   dynamic_replan_reason_code, dynamic_replan_subcode, 
   open_options,  old_access_plan_length, new_access_plan_length, system_wide_statement_cache,
    1
-from dbmon.m170718_QQQ1000 
+from dbmon.m170822_QQQ1000 -- dbmon.m170718_QQQ1000 
 ) a;
+-- 6310 plans on enddr 
 
 select count(*) from (
 select distinct system_name, current_date extract_date, -- job_name, --job_user, job_number, current_user_profile, Thread_ID, 
@@ -124,21 +126,20 @@ select distinct system_name, current_date extract_date, -- job_name, --job_user,
 --  dynamic_replan_reason_code, dynamic_replan_subcode, 
 --  open_options,  old_access_plan_length, new_access_plan_length, system_wide_statement_cache ,
    1
-from dbmon.m170718_QQQ1000 
+from dbmon.m170822_QQQ1000   -- dbmon.m170718_QQQ1000 
 ) a;
-
-order by statement_text;
+-- 4600 on enddr 
 
 --29,054 
 --4,161
 
 select count(*) from (
 select distinct system_name, current_date extract_date, -- job_name, --job_user, job_number, current_user_profile, Thread_ID, 
-  -- statement_number, 
---  cursor_name, statement_name, 
-  --package_library ,
-   Parse_Required, Procedure_Name, procedure_library, statement_function, 
-  sqlcode, sqlstate, 
+  -- statement_number,
+  -- cursor_name, statement_name,
+  --package_library,
+  Parse_Required, Procedure_Name, procedure_library, statement_function,
+  sqlcode, sqlstate,
   --total_time_microseconds, total_time_milliseconds, worst_time_micro, 
   statement_text, statement_text_long,  
   --start_timestamp, end_timestamp, fullopens, 
@@ -152,24 +153,19 @@ select distinct system_name, current_date extract_date, -- job_name, --job_user,
 --  dynamic_replan_reason_code, dynamic_replan_subcode, 
 --  open_options,  old_access_plan_length, new_access_plan_length, system_wide_statement_cache ,
    1
-from dbmon.m170718_QQQ1000 
+from dbmon.m170822_QQQ1000  --dbmon.m170718_QQQ1000 
 ) a;
 -- 2518 distinct statements
 -- 2582 with program & result
 -- 90% compression this way, so we'll go with it! 
-
   
-drop table qtemp.foo;
 
-select * from dbmon.m170718_QQQ1000 s where statement_number in (10002808, 9441561);
-
-
---create table qtemp.foo as (
+create table qtemp.foo as (
 WITH 
 plan_statements (naming_mode, dec_point, string_delim, statement_number, statement_text) AS (
   select '*SYS' naming_mode, '*PERIOD' dec_point, '*APOSTSQL' string_delim, statement_number, statement_text_long 
-  from dbmon.m170718_QQQ1000 s 
-  --where statement_number in (10002808, 9441561) --statement_text like ' SELECT XSOUSI%' and statement_number = 9441561      
+  from dbmon.m170822_QQQ1000  --dbmon.m170718_QQQ1000 s 
+  --where statement_number in (10002808, 9441561) --statement_text like '%SYS%' and statement_number = 9441561      
   ),
 parsed_statements (seq, name_type, name, schema, column_name, name_start_position, statement_number, statement_text) AS (
   SELECT row_number() over(partition by statement_number order by name_start_position) seq, name_type, c.name, c.schema, c.column_name, c.name_start_position, statement_number,
@@ -192,7 +188,10 @@ final_statement (statement_number, statement_text_parsed) as (
   where (a.statement_number, a.seq) in (select statement_number, max(b.seq) from stripped_statements b group by statement_number)) 
 select *  
 from final_statement --stripped_statements --parsed_statements --plan_statements --final_statement
-ORDER BY statement_number;
+ORDER BY statement_number) with data;
+
+select seq, count(*) from qtemp.foo group by seq; 
+select * from qtemp.foo;
 
 select * from qtemp.foo a where seq = 1; 
 select * from qtemp.foo b where seq = 2;
