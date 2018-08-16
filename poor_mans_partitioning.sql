@@ -10,7 +10,6 @@
 -- Create tables 
 -----------------
 execute immediate('set path =' || current_schema); 
-
 begin
   declare exit handler for sqlstate '42710' /* already exists, sql0601 */ 
   begin
@@ -108,14 +107,13 @@ CALL QSYS2.OVERRIDE_QAQQINI(2, 'OPEN_CURSOR_THRESHOLD', '-1');
 CALL qsys2.qcmdexc('STRDBMON OUTFILE(qtemp/tmpmonx) JOB(*) TYPE(*DETAIL)  COMMENT(DONT_REGISTER_MONITOR)');
 
 begin 
- --TODO add continue handler here.  42704
- SQL0204
+ --TODO add continue handler here.  42704   SQL0204
   alter table jan drop constraint only_jan;
   alter table feb drop constraint only_feb;
 end; 
 
 begin
-   declare rtv_rows integer default 1000000;
+   declare rtv_rows integer default 10000;
    declare cur_row integer;
    
    declare rnddta smallint; 
@@ -143,6 +141,7 @@ begin
    end while;
    
 end; 
+stop; 
 
 commit;
 call qsys2.qcmdexc('ALCOBJ OBJ(('||current_schema||'/JAN *FILE *EXCL)) WAIT(5) CONFLICT(*RQSRLS)'); 
@@ -263,9 +262,6 @@ create table qtemp.PERFORMANCE_LIST_EXPLAINABLE as (
 ) with data;
 
 select * from qtemp.performance_list_explainable;
-
-create table perfexp3 as (select * from qtemp.performance_list_explainable) with data;
-commit;
 
 stop; 
 
