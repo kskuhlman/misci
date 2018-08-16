@@ -155,17 +155,16 @@ commit;rollback;
 
 alter table jan add constraint only_jan check (mo = 1);
 alter table feb add constraint only_feb check (mo = 2);
+ stop; 
    
 -- Run again with check constraint enabled. 
 -------------------------------------------
 begin
-   declare rtv_rows integer default 1000000;
+   declare rtv_rows integer default 10000;
    declare cur_row integer;
    
    declare rnddta smallint; 
    declare junk integer;
-
-
    
    set cur_row = 1;
    while (cur_row <= rtv_rows) do
@@ -262,8 +261,16 @@ create table qtemp.PERFORMANCE_LIST_EXPLAINABLE as (
 ) with data;
 
 select * from qtemp.performance_list_explainable;
-
+create table perfexp41 as (select * from qtemp.performance_list_explainable) with data;
+insert into perfexp41 (select * from qtemp.performance_list_explainable);
+select * from perfexp41 order by QQI6_TOTAL desc;
+commit;
 stop; 
+
+2018-07-30 14:33:46.049728	2.432680	2305.192736	9147	0.252016	SELECT COUNT ( * ) INTO : H : H FROM MONTHS_DATA_ONLY WHERE DTA = : H : H  
+2018-07-30 15:23:47.834871	0.177768	445.336192	9999	0.044538	SELECT COUNT ( * ) INTO : H : H FROM MONTHS_DATA_MONTH_NBR_AND_FORCED_MONTH_NAME WHERE MONTH_NAME = 'FEBRUARY' AND MO = 2 AND DTA = : H : H  
+2018-07-30 15:16:56.923916	0.197384	402.879576	9999	0.040291	SELECT COUNT ( * ) INTO : H : H FROM MONTHS_DATA_AND_MONTH_NBR WHERE MO = 2 AND DTA = : H : H  
+2018-07-30 18:52:21.629920	0.444984	241.747160	9999	0.024177	SELECT COUNT ( * ) INTO : H : H FROM MONTHS_DATA_AND_MONTH_NBR_CONSTRAINED WHERE MO = 2 AND DTA = : H : H  
 
 
 --select * from qtemp.performance_list_explainable;
