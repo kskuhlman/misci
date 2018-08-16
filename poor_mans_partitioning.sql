@@ -1,54 +1,100 @@
-drop table jan;
-drop table feb;
+-- Create two "monthly files" and populate each with 10 millions rows.  
+-- Then try different approaches to building a poor-man's local range partitioning scheme on them.
+--    (Which is just a fancy way of saying build a UNION ALL view to join them).
+--
+-- A successful partitioning scheme will avoid lookups against tables (partitions) that aren't being 
+--   "needed" by the query.
+-- So to highlight any faults in the approaches, we'll leave off the index on the first partition 
+--  on the data column.  It'll just have keys on the partitioning fields.
 
+-- Create tables 
+-----------------
+execute immediate('set path =' || current_schema); 
 
-create table jan (mo smallint, dta smallint);                       
-create table feb like jan;
-
-/* generate test data */
 begin
-  declare create_rows integer default 10000000;
-  declare cur_row integer;
+  declare exit handler for sqlstate '42710' /* already exists, sql0601 */ 
+  begin
+    set gv_rebuild_tables = 'N';
+  end;
+  execute immediate('create variable gv_rebuild_tables char(1) default(''N'')');
+end; 
 
-  set cur_row = 1;
-  while (cur_row <= create_rows) do
-    insert into jan values(01, int(rand() * 255));
-    insert into feb values(02, int(rand() * 255));
-    set cur_row = cur_row + 1;
-  end while;
-end;
-commit;
+
+begin
+   declare create_rows integer default 10000000;
+   declare cur_row integer;
+
+  if gv_rebuild_tables = 'Y' then 
+    /* generate test data */
+    drop table jan;
+    drop table feb;
+    create table jan (
+      rid bigint generated always as identity primary key, 
+      mo smallint not null, 
+      dtanbr smallint not null, 
+      dtachr char(10) not null,
+      chgtsp timestamp not null generated always as row change timestamp
+      );
+    create table feb like jan including identity column attributes including row change timestamp column attributes;
+    alter table feb add primary key (rid); 
+    
+    set cur_row = 1;
+      while (cur_row <= create_rows) do
+        insert into jan (mo, dtanbr, dtachr) values(01, int(rand() * 255), TRANSLATE(CHAR(BIGINT(RAND() * 10000000000)), 'kenkuhlman', '1234567890'));
+        insert into feb (mo, dtanbr, dtachr) values(02, int(rand() * 255), TRANSLATE(CHAR(BIGINT(RAND() * 10000000000)), 'kenkuhlman', '1234567890'));
+        set cur_row = cur_row + 1;
+      end while;
+    end if;
+end; 
+commit;    
+
 
 create index jan01 on jan (mo); 
 --create index jan02 on jan (dta);   -- No index on data for one of the months so we can see tblscan if partitioning logic is not getting optimized.
 create index feb01 on feb (mo); 
 create index feb02 on feb (dta); 
 
-create or replace view monthsv1 as (
+create or replace view months_data_only as (
 select dta from jan
  union all
 select dta from feb
 );
 
-create or replace view monthsv1a as
+create or replace view months_data_and_month_nbr as
  (select mo, dta from jan
   union all
   select mo, dta from feb
-  );                                                     
+);
 
-create or replace view monthsv1b as
+-- this is identical to above, but won't be used until after we alter the tables to have constraints.
+--  having a distinct name to query makes it easier to check costs by query
+create or replace view months_data_and_month_nbr_constrained as
  (select mo, dta from jan
   union all
   select mo, dta from feb
-  );
+);
 
-create or replace view monthsv2 as
- (select smallint(1) rev_month, x.* from jan x
+-- Adding a derived field to the view is logically equivalent to having the field in the table..
+--   but does IBM i handle the predicate pushdown & branch elimination?
+-- Ref: Old LUW article: Partitioning in DB2 Using the UNION ALL View
+-- https://www.ibm.com/developerworks/data/library/techarticle/0202zuzarte/0202zuzarte.pdf
+create or replace view months_data_month_nbr_and_forced_month_name as
+ (select char('JANUARY', 10) month_name, x.* from jan x
   union all
-  select smallint(2) rev_month, x.* from feb x
-  );
+  select char('FEBRUARY', 10) month_name, x.* from feb x
+);
 
---------------------------------------------------------------
+-- Run queries once to get stats requests in & buffer whatever we can't avoid buffering when we purge purging pools later.
+-------------------------------------------------------------
+select count(*) from months_data_only where dta = 5;
+select count(*) from months_data_and_month_nbr where mo = 2 and dta = 5;
+select count(*) from months_data_and_month_nbr_constrained where mo = 2 and dta = 5;
+select count(*) from months_data_month_nbr_and_forced_month_name where month_name = 'FEBRUARY' and mo = 2 and dta = 5;
+-- Wait a bit to let system auto-gather stats.  Wish I could runstats here.
+call qsys2.qcmdexc('dlyjob 120'); 
+
+
+---------------------------------
 CALL QSYS2.SET_MONITOR_OPTION(1);
 -- CALL QSYS2.SET_MONITOR_OPTION(3);
 CALL QSYS2.QCMDEXC('QSYS/STRDBG UPDPROD(*YES)');
@@ -56,87 +102,28 @@ CALL QSYS2.OVERRIDE_QAQQINI(2, 'OPEN_CURSOR_THRESHOLD', '-1');
 
 CALL qsys2.qcmdexc('STRDBMON OUTFILE(qtemp/tmpmonx) JOB(*) TYPE(*DETAIL)  COMMENT(DONT_REGISTER_MONITOR)');
 
-
 --values timeit('select count(*) from sysibm.sysdummy1');
-
 call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');
-select count(*) from monthsv1 where dta = 5;
+call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');stop;
+select count(*) from months_data_only where dta = 5; 
 call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');
-select count(*) from kxk632.monthsv1a where mo = 2 and dta = 5;
+call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');stop;
+select count(*) from months_data_and_month_nbr where mo = 2 and dta = 5;  
 call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');
-select count(*) from kxk632.monthsv2 where rev_month = 2 and dta = 5;
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');
-commit;  call qsys2.qcmdexc('RCLRSC *');
+call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');stop;
+select count(*) from months_data_and_month_nbr_constrained where mo = 2 and dta = 5;
+commit;  call qsys2.qcmdexc('RCLRSC *'); call qsys2.qcmdexc('dlyjob 120'); 
 alter table jan add constraint only_jan check (mo = 1);
 alter table feb add constraint only_feb check (mo = 2);
-select count(*) from kxk632.monthsv1b where mo = 2 and dta = 5;
+call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
+call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');stop;
+select count(*) from months_data_month_nbr_and_forced_month_name where month_name = 'FEBRUARY' and mo = 2 and dta = 5;
 call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
 call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');
 
 CALL QSYS2.SET_MONITOR_OPTION(3);
 CALL qsys2.qcmdexc('ENDDBMON JOB(*) COMMENT(DONT_REGISTER_MONITOR)');
 CALL QSYS2.QCMDEXC('QSYS/ENDDBG');
-
-
---select * from qtemp.performance_list_explainable;
---select * from qtemp.monfile; 
-
--- SELECT SUM(CASE WHEN QVC11 = 'Z' THEN 1 ELSE 0 END) , MAX(QQC102)
---  --  INTO : H : H , : H : H
---   FROM QTEMP.MONFILE
---   WHERE QQRID = 3018
---   WITH NC;
--- 
-SELECT 1 -- INTO : H : H
- FROM QTEMP.TMPMONX A
- WHERE QQRID = 3010 AND EXISTS (SELECT 1
-                                    FROM QTEMP.TMPMONX B
-                                    WHERE QQRID = 1000 AND QQDBCLOB1 IS NULL AND QQC21 NOT IN ('FE' , 'CL' , 'CH' , 'HC') AND NOT (QQC21 IN ('DL' ,
-                                      'UP') AND QQC181 > ' ') AND A . QQJFLD = B . QQJFLD AND A . QQI5 = B . QQI5)
-FETCH FIRST 1 ROW ONLY;
---   WITH NC;
- -- 0 rows
-  
--- SELECT SUM(CASE WHEN QVC13 = 'Z' THEN 1 ELSE 0 END) , MAX(QQC11)
--- -- INTO : H : H , : H : H
---   FROM QTEMP.MONFILE
---   WHERE QQRID = 3018
---   WITH NC;
-
---call qsys2.qcmdexc('dsplib qtemp *print');
-
-select qqrid, qqtfn, qvqtbl, qvptbl, qqptfn, x.* from qtemp.TMPMONX x 
-where -- qqrid = 3020  -- 3000  3015
- qqtfn is not null
-order by qqrid, qqtfn;
-
-
--- Partitioning in DB2 Using the UNION ALL View
--- https://www.ibm.com/developerworks/data/library/techarticle/0202zuzarte/0202zuzarte.pdf
-
-
-
-
-SELECT * -- 1 -- INTO : H : H
- FROM QTEMP.TMPMONX A
- WHERE QQRID = 3010 AND EXISTS (SELECT 1
-                                    FROM QTEMP.TMPMONX B
-                                    WHERE QQRID = 1000 AND QQDBCLOB1 IS NULL AND QQC21 NOT IN ('FE' , 'CL' , 'CH' , 'HC') AND NOT (QQC21 IN ('DL' ,
-                                      'UP') AND QQC181 > ' ') AND A . QQJFLD = B . QQJFLD AND A . QQI5 = B . QQI5)
---FETCH FIRST 1 ROW ONLY
-;
-
-
-
-
-
-
-
-
 
 drop table qtemp.performance_list_explainable; 
 create table qtemp.PERFORMANCE_LIST_EXPLAINABLE as (
@@ -212,8 +199,55 @@ create table qtemp.PERFORMANCE_LIST_EXPLAINABLE as (
   WITH NC
 ) with data;
 
-
 select * from qtemp.performance_list_explainable;
+
+stop; 
+
+
+--select * from qtemp.performance_list_explainable;
+--select * from qtemp.monfile; 
+
+-- SELECT SUM(CASE WHEN QVC11 = 'Z' THEN 1 ELSE 0 END) , MAX(QQC102)
+--  --  INTO : H : H , : H : H
+--   FROM QTEMP.MONFILE
+--   WHERE QQRID = 3018
+--   WITH NC;
+-- 
+SELECT 1 -- INTO : H : H
+ FROM QTEMP.TMPMONX A
+ WHERE QQRID = 3010 AND EXISTS (SELECT 1
+                                    FROM QTEMP.TMPMONX B
+                                    WHERE QQRID = 1000 AND QQDBCLOB1 IS NULL AND QQC21 NOT IN ('FE' , 'CL' , 'CH' , 'HC') AND NOT (QQC21 IN ('DL' ,
+                                      'UP') AND QQC181 > ' ') AND A . QQJFLD = B . QQJFLD AND A . QQI5 = B . QQI5)
+FETCH FIRST 1 ROW ONLY;
+--   WITH NC;
+ -- 0 rows
+  
+-- SELECT SUM(CASE WHEN QVC13 = 'Z' THEN 1 ELSE 0 END) , MAX(QQC11)
+-- -- INTO : H : H , : H : H
+--   FROM QTEMP.MONFILE
+--   WHERE QQRID = 3018
+--   WITH NC;
+
+--call qsys2.qcmdexc('dsplib qtemp *print');
+
+select qqrid, qqtfn, qvqtbl, qvptbl, qqptfn, x.* from qtemp.TMPMONX x 
+where -- qqrid = 3020  -- 3000  3015
+ qqtfn is not null
+order by qqrid, qqtfn;
+
+
+SELECT * -- 1 -- INTO : H : H
+ FROM QTEMP.TMPMONX A
+ WHERE QQRID = 3010 AND EXISTS (SELECT 1
+                                    FROM QTEMP.TMPMONX B
+                                    WHERE QQRID = 1000 AND QQDBCLOB1 IS NULL AND QQC21 NOT IN ('FE' , 'CL' , 'CH' , 'HC') AND NOT (QQC21 IN ('DL' ,
+                                      'UP') AND QQC181 > ' ') AND A . QQJFLD = B . QQJFLD AND A . QQI5 = B . QQI5)
+--FETCH FIRST 1 ROW ONLY
+;
+
+
+
 
 
 WITH TT
@@ -263,4 +297,4 @@ BEGIN
   EXECUTE S1;
   set end_ts = current_timestamp;
   return (qsys2.timestampdiff(1, char(end_ts - str_ts)));
-END;                     
+END;
