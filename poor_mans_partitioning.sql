@@ -17,14 +17,15 @@ begin
     set gv_rebuild_tables = 'N';
   end;
   execute immediate('create variable gv_rebuild_tables char(1) default(''N'')');
-end; 
+end;
 
+values gv_rebuild_tables; 
 
 begin
-   declare create_rows integer default 10000000;
+   declare create_rows integer default 100000;
    declare cur_row integer;
 
-  if gv_rebuild_tables = 'Y' then 
+  if gv_rebuild_tables = 'Y' then
     /* generate test data */
     drop table jan;
     drop table feb;
@@ -33,10 +34,10 @@ begin
       mo smallint not null, 
       dtanbr smallint not null, 
       dtachr char(10) not null,
-      chgtsp timestamp not null generated always as row change timestamp
+      chgtsp timestamp not null generated always for each row on update as row change timestamp
       );
     create table feb like jan including identity column attributes including row change timestamp column attributes;
-    alter table feb add primary key (rid); 
+    --alter table feb add primary key (rid); 
     
     set cur_row = 1;
       while (cur_row <= create_rows) do
@@ -45,14 +46,15 @@ begin
         set cur_row = cur_row + 1;
       end while;
     end if;
+    
+    create index jan01 on jan (mo); 
+    -- No index on data for one of the months so we can see tblscan if partitioning logic is not getting optimized.
+    --create index jan02 on jan (dta);   
+    create index feb01 on feb (mo); 
+    create index feb02 on feb (dta); 
 end; 
 commit;    
 
-
-create index jan01 on jan (mo); 
---create index jan02 on jan (dta);   -- No index on data for one of the months so we can see tblscan if partitioning logic is not getting optimized.
-create index feb01 on feb (mo); 
-create index feb02 on feb (dta); 
 
 create or replace view months_data_only as (
 select dta from jan
@@ -94,6 +96,9 @@ select count(*) from months_data_month_nbr_and_forced_month_name where month_nam
 call qsys2.qcmdexc('dlyjob 120'); 
 
 
+call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
+call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');
+
 ---------------------------------
 CALL QSYS2.SET_MONITOR_OPTION(1);
 -- CALL QSYS2.SET_MONITOR_OPTION(3);
@@ -102,28 +107,86 @@ CALL QSYS2.OVERRIDE_QAQQINI(2, 'OPEN_CURSOR_THRESHOLD', '-1');
 
 CALL qsys2.qcmdexc('STRDBMON OUTFILE(qtemp/tmpmonx) JOB(*) TYPE(*DETAIL)  COMMENT(DONT_REGISTER_MONITOR)');
 
---values timeit('select count(*) from sysibm.sysdummy1');
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');stop;
-select count(*) from months_data_only where dta = 5; 
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');stop;
-select count(*) from months_data_and_month_nbr where mo = 2 and dta = 5;  
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');stop;
-select count(*) from months_data_and_month_nbr_constrained where mo = 2 and dta = 5;
-commit;  call qsys2.qcmdexc('RCLRSC *'); call qsys2.qcmdexc('dlyjob 120'); 
+begin 
+ --TODO add continue handler here.  42704
+ SQL0204
+  alter table jan drop constraint only_jan;
+  alter table feb drop constraint only_feb;
+end; 
+
+begin
+   declare rtv_rows integer default 1000000;
+   declare cur_row integer;
+   
+   declare rnddta smallint; 
+   declare junk integer;
+      
+   set cur_row = 1;
+   while (cur_row <= rtv_rows) do
+     set rnddta = int(rand() * 255);
+     select count(*) into junk from months_data_only where dta = rnddta;         
+     set cur_row = cur_row + 1;
+   end while;
+   
+   set cur_row = 1;
+   while (cur_row <= rtv_rows) do
+     set rnddta = int(rand() * 255);
+     select count(*) into junk from months_data_and_month_nbr where mo = 2 and dta = rnddta;         
+     set cur_row = cur_row + 1;
+   end while;
+
+   set cur_row = 1;
+   while (cur_row <= rtv_rows) do
+     set rnddta = int(rand() * 255);
+     select count(*) into junk from months_data_month_nbr_and_forced_month_name where month_name = 'FEBRUARY' and mo = 2 and dta = rnddta;
+     set cur_row = cur_row + 1;
+   end while;
+   
+end; 
+
+commit;
+call qsys2.qcmdexc('ALCOBJ OBJ(('||current_schema||'/JAN *FILE *EXCL)) WAIT(5) CONFLICT(*RQSRLS)'); 
+call qsys2.qcmdexc('ALCOBJ OBJ(('||current_schema||'/FEB *FILE *EXCL)) WAIT(5) CONFLICT(*RQSRLS)'); 
+call qsys2.qcmdexc('DLCOBJ OBJ(('||current_schema||'/JAN *FILE *EXCL))'); 
+call qsys2.qcmdexc('DLCOBJ OBJ(('||current_schema||'/FEB *FILE *EXCL))'); 
+call qsys2.qcmdexc('RCLRSC'); 
+call qsys2.qcmdexc('RCLACTGRP *ELIGIBLE'); 
+commit;rollback;
+
+
 alter table jan add constraint only_jan check (mo = 1);
 alter table feb add constraint only_feb check (mo = 2);
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');stop;
-select count(*) from months_data_month_nbr_and_forced_month_name where month_name = 'FEBRUARY' and mo = 2 and dta = 5;
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/JAN) OBJTYPE(*FILE) POOL(*PURGE)');
-call qsys2.qcmdexc('SETOBJACC OBJ('||current_schema||'/FEB) OBJTYPE(*FILE) POOL(*PURGE)');
+   
+-- Run again with check constraint enabled. 
+-------------------------------------------
+begin
+   declare rtv_rows integer default 1000000;
+   declare cur_row integer;
+   
+   declare rnddta smallint; 
+   declare junk integer;
+
+
+   
+   set cur_row = 1;
+   while (cur_row <= rtv_rows) do
+     set rnddta = int(rand() * 255);
+       select count(*) into junk from months_data_and_month_nbr_constrained where mo = 2 and dta = rnddta;
+     set cur_row = cur_row + 1;
+   end while;
+end; 
+   
+commit;    
+
+
+-- commit;  call qsys2.qcmdexc('RCLRSC *'); call qsys2.qcmdexc('dlyjob 120'); 
+
+
 
 CALL QSYS2.SET_MONITOR_OPTION(3);
 CALL qsys2.qcmdexc('ENDDBMON JOB(*) COMMENT(DONT_REGISTER_MONITOR)');
 CALL QSYS2.QCMDEXC('QSYS/ENDDBG');
+
 
 drop table qtemp.performance_list_explainable; 
 create table qtemp.PERFORMANCE_LIST_EXPLAINABLE as (
@@ -200,6 +263,9 @@ create table qtemp.PERFORMANCE_LIST_EXPLAINABLE as (
 ) with data;
 
 select * from qtemp.performance_list_explainable;
+
+create table perfexp3 as (select * from qtemp.performance_list_explainable) with data;
+commit;
 
 stop; 
 
@@ -298,3 +364,5 @@ BEGIN
   set end_ts = current_timestamp;
   return (qsys2.timestampdiff(1, char(end_ts - str_ts)));
 END;
+
+--values timeit('select count(*) from sysibm.sysdummy1');
