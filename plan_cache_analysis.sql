@@ -1,3 +1,5 @@
+-- https://www.ibm.com/support/knowledgecenter/ssw_ibm_i_71/rzajq/rzajqplancacheprocs.htm
+
 set current_schema dbmon;
 set path dbmon;
 
@@ -21,7 +23,8 @@ set gv_snapshot_name = 'QZG0001955';
 
 begin 
   declare stmt varchar(4096);
-  execute immediate ('create or replace alias dbmon.plan_latest for dbmon.'||gv_snapshot_name||'_QQQ1000');
+  declare l_slash varchar(1) default '/';
+  
   set stmt = 'create or replace view '||gv_snapshot_name||'_QQQ1000 as (
 SELECT QQRID as Row_ID, QQTIME as Time_Created, QQJFLD as Join_Column, QQRDBN as Relational_Database_Name, QQSYS as System_Name, QQJOB as Job_Name, 
   QQUSER as Job_User, QQJNUM as Job_Number, QQI9 as Thread_ID, QQUCNT as Unique_Count, QQI5 as Unique_Refresh_Counter, QQUDEF as User_Defined,
@@ -54,7 +57,41 @@ SELECT QQRID as Row_ID, QQTIME as Time_Created, QQJFLD as Join_Column, QQRDBN as
 FROM '||gv_snapshot_name||'
 WHERE QQRID=1000)';
  execute immediate stmt;
+ 
+ -- QZG0001955_QQQ1000 /* frm PRD */ -- m170822_QQQ1000   -- dbmon.m170718_QQQ1000 
+set stmt = 'create or replace view '||gv_snapshot_name||'_QQQ1000v1 as (
+select system_name, date(max(end_timestamp)) extract_date,
+  max(cast(job_number as char(6))||''''''||job_user||''''''||job_name) job, max(current_user_profile) current_user_profile,
+  max(statement_number) statement_number,
+  cursor_name, statement_name, package_library, parse_Required, procedure_name, procedure_library, statement_function,
+  sqlcode, sqlstate, statement_text, max(statement_text_long) statement_text_long, 
+  sum(total_time_microseconds) total_time_milliseconds, max(worst_time_micro) worst_time_micro,
+  max(start_timestamp) start_timestamp, max(end_timestamp) end_timestamp, sum(fullopens) fullopens,
+  allow_copy_data_value, first_n_rows_value,
+  max(ip_address) ip_address, sum(times_run) times_run,
+  commitment_control_level, statement_operation, statement_outcome,
+  data_conversion_reason_code,
+  sum(result_rows) result_rows, sum(rows_fetched) rows_fetched,
+  optimize_for_n_rows_value, pseudoopen, odp_implementation, sql_access_plan_reason_code, access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode,
+  dynamic_replan_reason_code, dynamic_replan_subcode, open_options,
+  max(old_access_plan_length) old_access_plan_length, max(new_access_plan_length) new_access_plan_length,
+  system_wide_statement_cache
+FROM '||gv_snapshot_name||'_QQQ1000
+group by system_name, cursor_name, statement_name, package_library, Parse_Required, Procedure_Name, procedure_library, statement_function,
+  sqlcode, sqlstate, statement_text,
+  Allow_Copy_Data_Value, first_n_rows_value,
+  commitment_control_level, statement_operation, statement_outcome, data_conversion_reason_code,
+  optimize_for_n_rows_value, pseudoopen, odp_implementation, sql_access_plan_reason_code,
+  access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode,
+  dynamic_replan_reason_code, dynamic_replan_subcode, open_options, system_wide_statement_cache
+)';
+  execute immediate stmt;
+
+  execute immediate ('create or replace alias dbmon.plan_latest for dbmon.'||gv_snapshot_name||'_QQQ1000');
+  execute immediate ('create or replace alias dbmon.plan_latestv1 for dbmon.'||gv_snapshot_name||'_QQQ1000v1');
+
 end;
+  
 
 create table dbmon.plan_raw as (select current_date capture_date, t.* from dbmon.plan_latest t) with no data;
 insert into dbmon.plan_raw select current_date capture_date, t.* from dbmon.plan_latest t;
@@ -66,67 +103,7 @@ select count(*) from dbmon.QZG0001955_QQQ1000; /* frm PRD */
 -- PRD: 17k
 select count(*) from dbmon.QZG0001955_QQQ1000v1;
 -- PRD: 1.5k
-
-create or replace view dbmon.xxxx as (
-select system_name, date(max(end_timestamp)) extract_date, 
---  max(cast(job_number as char(6))||'/'||job_user||'/'||job_name) job, max(current_user_profile) current_user_profile, 
---  max(statement_number) statement_number,
-  cursor_name, statement_name, package_library, parse_Required, procedure_name, procedure_library, statement_function, 
-  sqlcode, sqlstate, statement_text, statement_text_long, 
-  --statement_number 
---  sum(total_time_microseconds) total_time_milliseconds, max(worst_time_micro) worst_time_micro,
---  max(start_timestamp) start_timestamp, max(end_timestamp) end_timestamp, sum(fullopens) fullopens,
-  allow_copy_data_value, first_n_rows_value,
---  max(ip_address) ip_address, sum(times_run) times_run,
-  commitment_control_level, statement_operation, statement_outcome,
-  --insert_unique_count, --  sql_statement_length,
-  data_conversion_reason_code,
- -- sum(result_rows) result_rows, sum(rows_fetched) rows_fetched,
-  optimize_for_n_rows_value, pseudoopen, odp_implementation, sql_access_plan_reason_code, access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode,
-  dynamic_replan_reason_code, dynamic_replan_subcode, open_options,
---  max(old_access_plan_length) old_access_plan_length, max(new_access_plan_length) new_access_plan_length,
-  system_wide_statement_cache
-from dbmon.QZG0001955_QQQ1000 /* frm PRD */ -- m170822_QQQ1000   -- dbmon.m170718_QQQ1000 
-group by system_name, cursor_name, statement_name, package_library, Parse_Required, Procedure_Name, procedure_library, statement_function, 
-  sqlcode, sqlstate, statement_text, statement_text_long, Allow_Copy_Data_Value, first_n_rows_value, 
-  commitment_control_level, statement_operation, statement_outcome, data_conversion_reason_code, 
-  optimize_for_n_rows_value, pseudoopen, odp_implementation, sql_access_plan_reason_code, 
-  access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode, 
-  dynamic_replan_reason_code, dynamic_replan_subcode, open_options, system_wide_statement_cache  
-);
-
-
-
-create or replace view dbmon.xxxx as (
-select system_name, date(max(end_timestamp)) extract_date,
-  max(cast(job_number as char(6))||'/'||job_user||'/'||job_name) job, max(current_user_profile) current_user_profile,
-  max(statement_number) statement_number,
-  cursor_name, statement_name, package_library, parse_Required, procedure_name, procedure_library, statement_function,
-  sqlcode, sqlstate, statement_text, max(statement_text_long) statement_text_long,
- --statement_number 
-  sum(total_time_microseconds) total_time_milliseconds, max(worst_time_micro) worst_time_micro,
-  max(start_timestamp) start_timestamp, max(end_timestamp) end_timestamp, sum(fullopens) fullopens,
-  allow_copy_data_value, first_n_rows_value,
-  max(ip_address) ip_address, sum(times_run) times_run,
-  commitment_control_level, statement_operation, statement_outcome,
- --insert_unique_count, --  sql_statement_length,
-  data_conversion_reason_code,
-  sum(result_rows) result_rows, sum(rows_fetched) rows_fetched,
-  optimize_for_n_rows_value, pseudoopen, odp_implementation, sql_access_plan_reason_code, access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode,
-  dynamic_replan_reason_code, dynamic_replan_subcode, open_options,
-  max(old_access_plan_length) old_access_plan_length, max(new_access_plan_length) new_access_plan_length,
-  system_wide_statement_cache
-from dbmon.QZG0001955_QQQ1000 /* frm PRD */ -- m170822_QQQ1000   -- dbmon.m170718_QQQ1000 
-group by system_name, cursor_name, statement_name, package_library, Parse_Required, Procedure_Name, procedure_library, statement_function,
-  sqlcode, sqlstate, statement_text,
-  --statement_text_long,
-  Allow_Copy_Data_Value, first_n_rows_value,
-  commitment_control_level, statement_operation, statement_outcome, data_conversion_reason_code,
-  optimize_for_n_rows_value, pseudoopen, odp_implementation, sql_access_plan_reason_code,
-  access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode,
-  dynamic_replan_reason_code, dynamic_replan_subcode, open_options, system_wide_statement_cache
-);
--- 1435 PRD 
+-- 4600 on prd
   
 
 ----------------------------------------------
