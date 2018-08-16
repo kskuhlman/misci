@@ -1,44 +1,23 @@
--- Plan cache-related services:
---select service_category, service_schema_name, service_name, sql_object_type, example, earliest_possible_release from QSYS2.SERVICES_INFO where service_category in ('DATABASE-PERFORMANCE','DATABASE-PLAN CACHE');
--- DUMP_PLAN_CACHE
--- PERFORMANCE_LIST_EXPLAINABLE
--- LIST_EXPLAINABLE_DETAILED
--- ANALYZE_PLAN_CACHE 
--- EXTRACT_STATEMENTS
-
 set current_schema dbmon;
 set path dbmon;
-
---create or replace table dbmon.plan_raw as (select current_date capture_date, t.* from dbmon.plan_latest t where 1=2) with no data;
---create unique index dbmon.plan_raw1 on dbmon.plan_raw (capture_date, statement_number);
 
 create or replace variable gv_snapshot_schema varchar(10) default('DBMON');
 create or replace variable gv_snapshot_name varchar(10) default('M'||to_char(current_date, 'YYMMDD'));
 
+--create or replace table dbmon.plan_raw as (select current_date capture_date, t.* from dbmon.plan_latest t where 1=2) with no data;
+--create unique index dbmon.plan_raw1 on dbmon.plan_raw (capture_date, statement_number);
+
 CALL QSYS2.DUMP_PLAN_CACHE(gv_snapshot_schema, gv_snapshot_name);
--- 19 minutes on mydb.   10 minutes on enddr.
+-- 19 minutes on tst.   10 minutes on prd.
 
 
--- Same as above, jsut a different stored proc.   There are more parms, but they're named filter" 1-36, so who knows what is which :-(
---CALL QSYS2.ANALYZE_PLAN_CACHE( '01         10', gv_snapshot_schema, gv_snapshot_name, X'', 'RE');
-
--- I found extract_statements to be too incredibly slow.. cancelled after hours of running.  
---  Leaving here in case that changes, just commented out.
--- https://www.ibm.com/developerworks/community/wikis/home?lang=en#!/wiki/IBM%20i%20Technology%20Updates/page/QSYS2.EXTRACT_STATEMENTS()%20procedure
--- Most recent 100 statements
---CALL QSYS2.EXTRACT_STATEMENTS(gv_snapshot_schema, gv_snapshot_name, '*AUDIT', 'AND QQC21 NOT IN (''CH'', ''CL'', ''CN'', ''DE'', ''DI'', ''DM'', ''HC'', ''HH'', ''JR'', ''FE'', ''PD'', ''PR'', ''PD'')', ' ORDER BY QQSTIM DESC FETCH FIRST 100 ROWS ONLY ');
--- Everything over 1 second.
---CALL QSYS2.EXTRACT_STATEMENTS(gv_snapshot_schema, gv_snapshot_name, ADDITIONAL_SELECT_COLUMNS => ' DEC(QQI6)/1000000.0 as Total_time, QVC102 as Current_User_Profile ', ADDITIONAL_PREDICATES => ' AND QQI6 > 1000000 ', ORDER_BY => ' ORDER BY QQI6 DESC ');
--- Everything over 1 second for current_user
---CALL QSYS2.EXTRACT_STATEMENTS(gv_snapshot_schema, gv_snapshot_name, ADDITIONAL_SELECT_COLUMNS => ' DEC(QQI6)/1000000.0 as Total_time, QVC102 as Current_User_Profile ', ADDITIONAL_PREDICATES => ' AND QVC102 = ''''current_user'''' AND QQI6 > 1000000 ', ORDER_BY => ' ORDER BY QQI6 DESC ');
-
-----------------------------------------------------------------------------------------------------------------------------------------------------------
-----------------------------------------------------------------------------------------------------------------------------------------------------------
-
--- This view is straight from the docs:
+-- Create a view over the dump that's straight from the docs: 
 -- https://www.ibm.com/developerworks/community/wikis/home?lang=en#!/wiki/IBM%20i%20Technology%20Updates/page/Automated%20DBE%20tasks%20for%20Navigator
 
 --set gv_snapshot_name = 'm170718';
+--set gv_snapshot_name = 'm170822';
+set gv_snapshot_name = 'QZG0001955';
+
 
 begin 
   declare stmt varchar(4096);
@@ -83,88 +62,80 @@ insert into dbmon.plan_raw select current_date capture_date, t.* from dbmon.plan
 select count(*) from dbmon.plan_raw;
 select * from dbmon.plan_raw where upper(statement_text) like '%SYS%';
 
+select count(*) from dbmon.QZG0001955_QQQ1000; /* frm PRD */
+-- PRD: 17k
+select count(*) from dbmon.QZG0001955_QQQ1000v1;
+-- PRD: 1.5k
 
-select count(*) from (
-select distinct system_name, current_date extract_date, -- job_name, --job_user, job_number, current_user_profile, Thread_ID, 
-  -- statement_number, 
-  cursor_name, statement_name, 
-  package_library, Parse_Required, Procedure_Name, procedure_library, statement_function, sqlcode, sqlstate, 
-  --total_time_microseconds, total_time_milliseconds, worst_time_micro, 
-  statement_text, statement_text_long,  
-  --start_timestamp, end_timestamp, fullopens, 
-  Allow_Copy_Data_Value, first_n_rows_value, 
-  --ip_address, --times_run,  
-  commitment_control_level, statement_operation, statement_outcome, --insert_unique_count, 
-  sql_statement_length, 
-  data_conversion_reason_code, --result_rows, rows_fetched, 
-  optimize_for_n_rows_value, pseudoopen, odp_implementation, 
-  sql_access_plan_reason_code, access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode, 
-  dynamic_replan_reason_code, dynamic_replan_subcode, 
-  open_options,  old_access_plan_length, new_access_plan_length, system_wide_statement_cache,
-   1
-from dbmon.m170822_QQQ1000 -- dbmon.m170718_QQQ1000 
-) a;
--- 6310 plans on enddr 
+create or replace view dbmon.xxxx as (
+select system_name, date(max(end_timestamp)) extract_date, 
+--  max(cast(job_number as char(6))||'/'||job_user||'/'||job_name) job, max(current_user_profile) current_user_profile, 
+--  max(statement_number) statement_number,
+  cursor_name, statement_name, package_library, parse_Required, procedure_name, procedure_library, statement_function, 
+  sqlcode, sqlstate, statement_text, statement_text_long, 
+  --statement_number 
+--  sum(total_time_microseconds) total_time_milliseconds, max(worst_time_micro) worst_time_micro,
+--  max(start_timestamp) start_timestamp, max(end_timestamp) end_timestamp, sum(fullopens) fullopens,
+  allow_copy_data_value, first_n_rows_value,
+--  max(ip_address) ip_address, sum(times_run) times_run,
+  commitment_control_level, statement_operation, statement_outcome,
+  --insert_unique_count, --  sql_statement_length,
+  data_conversion_reason_code,
+ -- sum(result_rows) result_rows, sum(rows_fetched) rows_fetched,
+  optimize_for_n_rows_value, pseudoopen, odp_implementation, sql_access_plan_reason_code, access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode,
+  dynamic_replan_reason_code, dynamic_replan_subcode, open_options,
+--  max(old_access_plan_length) old_access_plan_length, max(new_access_plan_length) new_access_plan_length,
+  system_wide_statement_cache
+from dbmon.QZG0001955_QQQ1000 /* frm PRD */ -- m170822_QQQ1000   -- dbmon.m170718_QQQ1000 
+group by system_name, cursor_name, statement_name, package_library, Parse_Required, Procedure_Name, procedure_library, statement_function, 
+  sqlcode, sqlstate, statement_text, statement_text_long, Allow_Copy_Data_Value, first_n_rows_value, 
+  commitment_control_level, statement_operation, statement_outcome, data_conversion_reason_code, 
+  optimize_for_n_rows_value, pseudoopen, odp_implementation, sql_access_plan_reason_code, 
+  access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode, 
+  dynamic_replan_reason_code, dynamic_replan_subcode, open_options, system_wide_statement_cache  
+);
 
-select count(*) from (
-select distinct system_name, current_date extract_date, -- job_name, --job_user, job_number, current_user_profile, Thread_ID, 
-  -- statement_number, 
---  cursor_name, statement_name, 
-  --package_library ,
-   Parse_Required, Procedure_Name, procedure_library, statement_function, 
-  sqlcode, sqlstate, 
-  --total_time_microseconds, total_time_milliseconds, worst_time_micro, 
-  statement_text, statement_text_long,  
-  --start_timestamp, end_timestamp, fullopens, 
---  Allow_Copy_Data_Value, first_n_rows_value, 
-  --ip_address, --times_run,  
---  commitment_control_level, statement_operation, statement_outcome, --insert_unique_count, 
---  sql_statement_length, --
---  data_conversion_reason_code, --result_rows, rows_fetched, 
---  optimize_for_n_rows_value, pseudoopen, odp_implementation, 
---  sql_access_plan_reason_code, access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode, 
---  dynamic_replan_reason_code, dynamic_replan_subcode, 
---  open_options,  old_access_plan_length, new_access_plan_length, system_wide_statement_cache ,
-   1
-from dbmon.m170822_QQQ1000   -- dbmon.m170718_QQQ1000 
-) a;
--- 4600 on enddr 
 
---29,054 
---4,161
 
-select count(*) from (
-select distinct system_name, current_date extract_date, -- job_name, --job_user, job_number, current_user_profile, Thread_ID, 
-  -- statement_number,
-  -- cursor_name, statement_name,
-  --package_library,
-  Parse_Required, Procedure_Name, procedure_library, statement_function,
-  sqlcode, sqlstate,
-  --total_time_microseconds, total_time_milliseconds, worst_time_micro, 
-  statement_text, statement_text_long,  
-  --start_timestamp, end_timestamp, fullopens, 
---  Allow_Copy_Data_Value, first_n_rows_value, 
-  --ip_address, --times_run,  
---  commitment_control_level, statement_operation, statement_outcome, --insert_unique_count, 
---  sql_statement_length, --
---  data_conversion_reason_code, --result_rows, rows_fetched, 
---  optimize_for_n_rows_value, pseudoopen, odp_implementation, 
---  sql_access_plan_reason_code, access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode, 
---  dynamic_replan_reason_code, dynamic_replan_subcode, 
---  open_options,  old_access_plan_length, new_access_plan_length, system_wide_statement_cache ,
-   1
-from dbmon.m170822_QQQ1000  --dbmon.m170718_QQQ1000 
-) a;
--- 2518 distinct statements
--- 2582 with program & result
--- 90% compression this way, so we'll go with it! 
+create or replace view dbmon.xxxx as (
+select system_name, date(max(end_timestamp)) extract_date,
+  max(cast(job_number as char(6))||'/'||job_user||'/'||job_name) job, max(current_user_profile) current_user_profile,
+  max(statement_number) statement_number,
+  cursor_name, statement_name, package_library, parse_Required, procedure_name, procedure_library, statement_function,
+  sqlcode, sqlstate, statement_text, max(statement_text_long) statement_text_long,
+ --statement_number 
+  sum(total_time_microseconds) total_time_milliseconds, max(worst_time_micro) worst_time_micro,
+  max(start_timestamp) start_timestamp, max(end_timestamp) end_timestamp, sum(fullopens) fullopens,
+  allow_copy_data_value, first_n_rows_value,
+  max(ip_address) ip_address, sum(times_run) times_run,
+  commitment_control_level, statement_operation, statement_outcome,
+ --insert_unique_count, --  sql_statement_length,
+  data_conversion_reason_code,
+  sum(result_rows) result_rows, sum(rows_fetched) rows_fetched,
+  optimize_for_n_rows_value, pseudoopen, odp_implementation, sql_access_plan_reason_code, access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode,
+  dynamic_replan_reason_code, dynamic_replan_subcode, open_options,
+  max(old_access_plan_length) old_access_plan_length, max(new_access_plan_length) new_access_plan_length,
+  system_wide_statement_cache
+from dbmon.QZG0001955_QQQ1000 /* frm PRD */ -- m170822_QQQ1000   -- dbmon.m170718_QQQ1000 
+group by system_name, cursor_name, statement_name, package_library, Parse_Required, Procedure_Name, procedure_library, statement_function,
+  sqlcode, sqlstate, statement_text,
+  --statement_text_long,
+  Allow_Copy_Data_Value, first_n_rows_value,
+  commitment_control_level, statement_operation, statement_outcome, data_conversion_reason_code,
+  optimize_for_n_rows_value, pseudoopen, odp_implementation, sql_access_plan_reason_code,
+  access_plan_not_saved_reason_code, hard_close_reason_code, Hard_Close_Subcode,
+  dynamic_replan_reason_code, dynamic_replan_subcode, open_options, system_wide_statement_cache
+);
+-- 1435 PRD 
   
+
+----------------------------------------------
 
 create table qtemp.foo as (
 WITH 
 plan_statements (naming_mode, dec_point, string_delim, statement_number, statement_text) AS (
   select '*SYS' naming_mode, '*PERIOD' dec_point, '*APOSTSQL' string_delim, statement_number, statement_text_long 
-  from dbmon.m170822_QQQ1000  --dbmon.m170718_QQQ1000 s 
+  from dbmon.QZG0001905 /* frm PRD */ -- m170822_QQQ1000  --dbmon.m170718_QQQ1000 s 
   --where statement_number in (10002808, 9441561) --statement_text like '%SYS%' and statement_number = 9441561      
   ),
 parsed_statements (seq, name_type, name, schema, column_name, name_start_position, statement_number, statement_text) AS (
